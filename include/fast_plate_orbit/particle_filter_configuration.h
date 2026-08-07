@@ -27,7 +27,7 @@ PF_TARGET_ONLY_ATTRS [[nodiscard]] inline float log_sigmoid(const float& x) noex
 
 struct most_likely_particle_reduction_impl {
   using state_type = pf::filter::particle_reduction_state<prediction>;
-  static constexpr float half_pi = M_PI_2;
+  static constexpr float pi = M_PI;
 
   PF_TARGET_ONLY_ATTRS [[nodiscard]] inline state_type operator()(const state_type& a, const state_type& b) const noexcept {
     // this does not necessarily provide the correct mean in the MLE sense,
@@ -36,10 +36,12 @@ struct most_likely_particle_reduction_impl {
     const prediction a_particle = a.most_likely_particle();
     const prediction b_particle = b.most_likely_particle();
 
+    // Symmetry period is pi (180 deg): rotating by pi maps each plate onto its same-height
+    // opposite, so the z_offset sign is preserved and needs no candidate-specific swap.
     const pf::util::device_array<float, 3> candidates = {
-        a_particle.orientation() + 0.0f * half_pi,
-        a_particle.orientation() + 1.0f * half_pi,
-        a_particle.orientation() - 1.0f * half_pi,
+        a_particle.orientation() + 0.0f * pi,
+        a_particle.orientation() + 1.0f * pi,
+        a_particle.orientation() - 1.0f * pi,
     };
 
     const auto target = b_particle.orientation();
@@ -56,7 +58,9 @@ struct most_likely_particle_reduction_impl {
     const Eigen::Vector3f center = c_alpha * a_particle.center() + alpha * b_particle.center();
     const Eigen::Vector2f center_velocity = c_alpha * a_particle.center_velocity() + alpha * b_particle.center_velocity();
 
-    const auto state = prediction(radius, orientation, orientation_velocity, center, center_velocity);
+    const float z_offset = c_alpha * a_particle.z_offset() + alpha * b_particle.z_offset();
+
+    const auto state = prediction(radius, orientation, orientation_velocity, center, center_velocity, z_offset);
     return state_type{state, a.count() + b.count()};
   }
 };
@@ -130,7 +134,10 @@ class particle_filter_configuration {
     const Eigen::Vector3f center = orbit.center + sampler.normal_sample(state.plate_one().position_diagonal_covariance());
     const Eigen::Vector2f center_velocity = sampler.normal_sample(params_.center_xy_velocity_prior_diagonal_covariance);
 
-    return prediction(radius, orientation, orientation_velocity, center, center_velocity);
+    // Fixed geometry: every particle gets the known plate height offset (not estimated).
+    const float z_offset = params_.plate_height_offset;
+
+    return prediction(radius, orientation, orientation_velocity, center, center_velocity, z_offset);
   }
 
   PF_TARGET_ONLY_ATTRS void apply_process(const float& time_offset_seconds, util::default_rv_sampler& sampler, prediction& state)
