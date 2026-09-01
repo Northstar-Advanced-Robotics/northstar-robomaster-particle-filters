@@ -6,6 +6,7 @@
 
 #include <Eigen/Dense>
 #include <array>
+#include <cuda/std/algorithm>
 
 namespace plate_orbit_v2 {
 
@@ -23,7 +24,7 @@ PF_TARGET_ATTRS [[nodiscard]] inline float to_orientation(const float& angle_rad
 PF_TARGET_ATTRS [[nodiscard]] inline float to_radius(const float& radius) noexcept {
   constexpr float min_radius = 0.2f;
   constexpr float max_radius = 1.0f;
-  return thrust::max(min_radius, thrust::min(max_radius, radius));
+  return cuda::std::max(min_radius, cuda::std::min(max_radius, radius));
 }
 
 struct radii_update_configuration {
@@ -46,8 +47,8 @@ PF_TARGET_ATTRS inline void update_value_offsets(
   constexpr float offset_limit = U::offset_limit;
 
   const float value_common = 0.5f * (value_0 + value_1) + d_value_common;
-  const float value_offset_0 = thrust::min(offset_limit, thrust::max(-offset_limit, value_0 + d_value_0 - value_common));
-  const float value_offset_1 = thrust::min(offset_limit, thrust::max(-offset_limit, value_1 + d_value_1 - value_common));
+  const float value_offset_0 = cuda::std::min(offset_limit, cuda::std::max(-offset_limit, value_0 + d_value_0 - value_common));
+  const float value_offset_1 = cuda::std::min(offset_limit, cuda::std::max(-offset_limit, value_1 + d_value_1 - value_common));
 
   value_0 = U::post_process(value_common + value_offset_0);
   value_1 = U::post_process(value_common + value_offset_1);

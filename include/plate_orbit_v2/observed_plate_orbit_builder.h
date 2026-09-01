@@ -5,6 +5,7 @@
 #include <thrust/execution_policy.h>
 
 #include <Eigen/Dense>
+#include <cuda/std/algorithm>
 
 namespace plate_orbit_v2 {
 
@@ -32,7 +33,7 @@ class observed_plate_orbit_builder {
     const Eigen::Vector3f delta = 0.5f * (Eigen::Vector3f{} << -one_to_two[1], one_to_two[0], 0.0f).finished();
 
     const Eigen::Vector3f predicted_center =
-        thrust::max((midpoint + delta).eval(), (midpoint + -delta).eval(), [this](const auto& a, const auto& b) {
+        cuda::std::max((midpoint + delta).eval(), (midpoint + -delta).eval(), [this](const auto& a, const auto& b) {
           return (a - observer_position_).norm() < (b - observer_position_).norm();
         });
 
