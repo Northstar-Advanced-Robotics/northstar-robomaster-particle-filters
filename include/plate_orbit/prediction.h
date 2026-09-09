@@ -6,7 +6,6 @@
 
 #include <Eigen/Dense>
 #include <array>
-#include <cuda/std/algorithm>
 
 namespace plate_orbit {
 
@@ -14,7 +13,7 @@ namespace helper {
 
 PF_TARGET_ATTRS [[nodiscard]] inline float to_radius(const float& radius) noexcept {
   constexpr float min_radius = 0.01f;
-  return cuda::std::max(min_radius, radius);
+  return thrust::max(min_radius, radius);
 }
 
 PF_TARGET_ATTRS [[nodiscard]] inline float to_orientation(const float& angle_radians) noexcept {
