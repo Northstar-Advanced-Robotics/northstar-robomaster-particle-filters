@@ -50,7 +50,8 @@ struct most_likely_particle_reduction_impl {
     const float alpha = static_cast<float>(b.count()) / static_cast<float>(a.count() + b.count());
     const float c_alpha = 1.0f - alpha;
 
-    const float radius = c_alpha * a_particle.radius() + alpha * b_particle.radius();
+    const float radius_0_ = c_alpha * a_particle.radius_0() + alpha * b_particle.radius_0();
+    const float radius_1_ = c_alpha * a_particle.radius_1() + alpha * b_particle.radius_1();
 
     const float orientation = c_alpha * a_orientation + alpha * b_particle.orientation();
     const float orientation_velocity = c_alpha * a_particle.orientation_velocity() + alpha * b_particle.orientation_velocity();
@@ -60,7 +61,7 @@ struct most_likely_particle_reduction_impl {
 
     const float z_offset = c_alpha * a_particle.z_offset() + alpha * b_particle.z_offset();
 
-    const auto state = prediction(radius, orientation, orientation_velocity, center, center_velocity, z_offset);
+    const auto state = prediction(radius_0_, radius_1_ , orientation, orientation_velocity, center, center_velocity, z_offset);
     return state_type{state, a.count() + b.count()};
   }
 };
@@ -126,7 +127,8 @@ class particle_filter_configuration {
     const float radius_variance =
         state.plate_two().has_value() ? params_.radius_prior_variance_two_plates : params_.radius_prior_variance_one_plate;
 
-    const float radius = orbit.radius + sampler.normal_sample(radius_variance);
+    const float radius_0 = orbit.radius + sampler.normal_sample(radius_variance);
+    const float radius_1 = orbit.radius + sampler.normal_sample(radius_variance);
 
     const float orientation = orbit.orientation;
     const float orientation_velocity = sampler.normal_sample(params_.orientation_velocity_prior_variance);
@@ -137,12 +139,13 @@ class particle_filter_configuration {
     // Fixed geometry: every particle gets the known plate height offset (not estimated).
     const float z_offset = params_.plate_height_offset;
 
-    return prediction(radius, orientation, orientation_velocity, center, center_velocity, z_offset);
+    return prediction(radius_0, radius_1, orientation, orientation_velocity, center, center_velocity, z_offset);
   }
 
   PF_TARGET_ONLY_ATTRS void apply_process(const float& time_offset_seconds, util::default_rv_sampler& sampler, prediction& state)
       const noexcept {
-    const float radius_noise = sampler.normal_sample(params_.radius_process_variance);
+    const float radius_0_noise = sampler.normal_sample(params_.radius_process_variance);
+    const float radius_1_noise = sampler.normal_sample(params_.radius_process_variance);
     const float orientation_velocity_noise_0 = sampler.normal_sample(params_.orientation_velocity_process_variance);
     const float orientation_velocity_noise_1 = sampler.normal_sample(params_.orientation_velocity_process_variance);
 
@@ -156,7 +159,8 @@ class particle_filter_configuration {
 
     state.update_state(
         time_offset_seconds,
-        radius_noise,
+        radius_0_noise,
+        radius_1_noise,
         orientation_velocity_noise_0,
         orientation_velocity_noise_1,
         center_z_position_noise,

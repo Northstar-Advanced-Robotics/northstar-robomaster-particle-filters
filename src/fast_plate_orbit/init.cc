@@ -34,7 +34,8 @@ void init(py::module_& m) noexcept {
 
   py::class_<prediction>(fast_plate_orbit, "Prediction")
       .def("predicted_plates", &prediction::predicted_plates_for_host)
-      .def("radius", &prediction::radius)
+      .def("radius_0", &prediction::radius_0)
+      .def("radius_1", &prediction::radius_1)
       .def("orientation", &prediction::orientation)
       .def("orientation_velocity", &prediction::orientation_velocity)
       .def("center", &prediction::center)
