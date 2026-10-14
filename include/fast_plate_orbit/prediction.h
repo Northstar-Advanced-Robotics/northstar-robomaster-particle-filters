@@ -47,6 +47,7 @@ class prediction {
   float radius_0_;
   float radius_1_;
   float z_offset_;  // half the height difference between the two alternating plate pairs
+  float settled_;   // seconds this particle has watched the robot spin (geometry settles with it)
 
   float orientation_;
   float orientation_velocity_;
@@ -96,7 +97,8 @@ class prediction {
         orientation_velocity_,
         center_ + time_offset_seconds * helper::rpad_zero(center_velocity_),
         center_velocity_,
-        z_offset_);
+        z_offset_,
+        settled_);
   }
 
   PF_TARGET_ATTRS void update_state(
@@ -112,7 +114,9 @@ class prediction {
       const int& radius_mode = 0,
       const float& radius_prior = 0.0f,
       const float& radius_reversion_time = 1.0f,
-      const bool& relabel_at_zero = false) noexcept {
+      const bool& relabel_at_zero = false,
+      const float& lock_time = 0.0f,
+      const float& lock_floor = 1.0f) noexcept {
     static constexpr float one_half = 1.0 / 2.0;
     static constexpr float one_twelfth = 1.0 / 12.0;
 
@@ -127,12 +131,18 @@ class prediction {
     const float spin_gate = pf::util::max(0.0f, pf::util::min(1.0f, (3.0f - fabsf(orientation_velocity_)) / 2.0f));
     const float pull_weight = radius_mode == 2 ? 1.0f : (radius_mode == 3 ? spin_gate : 0.0f);
     const float radius_pull = pull_weight * pf::util::min(1.0f, time_offset_seconds / radius_reversion_time);
-    const float d_radius_0 = radius_noise_gain * radius_noise_scale * radius_0_noise - radius_pull * (radius_0_ - radius_prior);
-    const float d_radius_1 = radius_noise_gain * radius_noise_scale * radius_1_noise - radius_pull * (radius_1_ - radius_prior);
+    // Geometry settles as the particle watches the robot spin: its noise fades toward lock_floor.
+    if (fabsf(orientation_velocity_) > 2.0f) settled_ += time_offset_seconds;
+    const float lock_gain = lock_time > 0.0f ? lock_floor + (1.0f - lock_floor) * expf(-settled_ / lock_time) : 1.0f;
 
-    const float d_center_z = center_z_position_noise_scale * center_z_position_noise;
+    const float d_radius_0 =
+        lock_gain * radius_noise_gain * radius_noise_scale * radius_0_noise - radius_pull * (radius_0_ - radius_prior);
+    const float d_radius_1 =
+        lock_gain * radius_noise_gain * radius_noise_scale * radius_1_noise - radius_pull * (radius_1_ - radius_prior);
 
-    const float d_z_offset = radius_noise_scale * z_offset_noise;
+    const float d_center_z = lock_gain * center_z_position_noise_scale * center_z_position_noise;
+
+    const float d_z_offset = lock_gain * radius_noise_scale * z_offset_noise;
 
     const float d_orientation_velocity = velocity_noise_scale * orientation_velocity_noise_1;
     const float d_orientation = time_offset_seconds * orientation_velocity_ +
@@ -170,6 +180,7 @@ class prediction {
   PF_TARGET_ATTRS [[nodiscard]] const float& radius_0() const noexcept { return radius_0_; }
   PF_TARGET_ATTRS [[nodiscard]] const float& radius_1() const noexcept { return radius_1_; }
   PF_TARGET_ATTRS [[nodiscard]] const float& z_offset() const noexcept { return z_offset_; }
+  PF_TARGET_ATTRS [[nodiscard]] const float& settled() const noexcept { return settled_; }
   PF_TARGET_ATTRS [[nodiscard]] const float& orientation() const noexcept { return orientation_; }
   PF_TARGET_ATTRS [[nodiscard]] const float& orientation_velocity() const noexcept { return orientation_velocity_; }
   PF_TARGET_ATTRS [[nodiscard]] const Eigen::Vector3f& center() const noexcept { return center_; }
@@ -179,6 +190,7 @@ class prediction {
       : radius_0_{0.0f},
         radius_1_{0.0f},
         z_offset_{0.0f},
+        settled_{0.0f},
         orientation_{0.0f},
         orientation_velocity_{0.0f},
         center_{Eigen::Vector3f::Zero()},
@@ -191,10 +203,12 @@ class prediction {
       const float& orientation_velocity,
       const Eigen::Vector3f& center,
       const Eigen::Vector2f& center_velocity,
-      const float& z_offset) noexcept
+      const float& z_offset,
+      const float& settled = 0.0f) noexcept
       : radius_0_{helper::to_radius(radius_0)},
         radius_1_{helper::to_radius(radius_1)},
         z_offset_{helper::to_z_offset(z_offset)},
+        settled_{settled},
         orientation_{helper::to_orientation(orientation)},
         orientation_velocity_{orientation_velocity},
         center_{center},

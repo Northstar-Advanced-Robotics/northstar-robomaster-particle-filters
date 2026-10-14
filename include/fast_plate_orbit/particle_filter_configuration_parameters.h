@@ -25,6 +25,9 @@ struct particle_filter_configuration_parameters {
   Eigen::Vector2f center_xy_velocity_process_diagonal_covariance;
 
   // Switches for A/B runs in the simulator; the defaults are the behavior before they existed.
+  // seed > 0 offsets every particle's random sequence, for independent repeats (the filter is
+  // otherwise seeded the same way every time).
+  int seed = 0;
   // radius_mode 0: radius noise only while |omega| > 2 rad/s; 1: always; 2: always, and each radius
   // relaxes toward radius_prior with time constant radius_reversion_time (s); 3: like 2, but the pull
   // fades out as the robot spins faster (none above 3 rad/s).
@@ -38,6 +41,30 @@ struct particle_filter_configuration_parameters {
   // Plate visibility from horizontal directions only (as plate_orbit_v2), so plate heights and the
   // observer's height don't change how visible a plate looks.
   bool visibility_xy = false;
+  // obs_model 1: a plate's measured position is precise across the line of sight
+  // (obs_lateral_variance) and less so along it (obs_range_variance), the more so the further the
+  // plate is turned from the camera (+ obs_range_angle_variance * sin^2 of that angle, from the
+  // particle's own plate). Height keeps the observation's variance. 0: the observation's diagonal.
+  int obs_model = 0;
+  // assoc_best: a lone plate is matched to whichever of the two plates nearest the camera fits it
+  // (with that one visible, the others not), not always to the nearest; around a plate switch the
+  // plate in view is often the other one.
+  bool assoc_best = false;
+  float obs_lateral_variance = 0.0001f;
+  float obs_range_variance = 0.001f;
+  float obs_range_angle_variance = 0.006f;
+  // lock_time > 0: the radii, height offset and center height settle. Their process noise is
+  // scaled by lock_floor + (1 - lock_floor) * exp(-settled / lock_time), where settled is the
+  // time the particle has watched the robot spin (faster than 2 rad/s, when they show).
+  float lock_time = 0.0f;
+  float lock_floor = 0.1f;
+  // What an earlier filter learned about this robot: radius_prior_high / _low > 0 start the high
+  // and low pairs there (radius_prior_variance_memory), and the particles start settled_prior
+  // seconds settled. z_offset_prior / z_offset_prior_variance carry its height offset.
+  float radius_prior_high = 0.0f;
+  float radius_prior_low = 0.0f;
+  float radius_prior_variance_memory = 0.0001f;
+  float settled_prior = 0.0f;
 };
 
 }  // namespace fast_plate_orbit

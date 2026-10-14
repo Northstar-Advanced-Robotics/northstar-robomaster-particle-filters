@@ -86,7 +86,10 @@ struct most_likely_particle_reduction_impl {
     const Eigen::Vector3f center = c_alpha * a_particle.center() + alpha * b_particle.center();
     const Eigen::Vector2f center_velocity = c_alpha * a_particle.center_velocity() + alpha * b_particle.center_velocity();
 
-    const auto state = prediction(radius_0, radius_1, orientation, orientation_velocity, center, center_velocity, z_offset);
+    const float settled = c_alpha * a_particle.settled() + alpha * b_particle.settled();
+
+    const auto state =
+        prediction(radius_0, radius_1, orientation, orientation_velocity, center, center_velocity, z_offset, settled);
     return state_type{state, a.count() + b.count()};
   }
 };
@@ -122,16 +125,34 @@ class particle_filter_configuration {
           return params_.visibility_logit_coefficient * similarity;
         });
 
-    auto log_p_of = [&sampler](const observed_plate& x, const predicted_plate& y) {
+    auto log_p_of = [&, this](const observed_plate& x, const predicted_plate& y) {
       const auto error = (x.position() - y.position()).eval();
-      return sampler.unnormalized_normal_log_density(x.position_diagonal_covariance(), error);
+      if (params_.obs_model == 0) {
+        return sampler.unnormalized_normal_log_density(x.position_diagonal_covariance(), error);
+      }
+      // Along and across the camera ray (horizontally); along it, the less reliable the further
+      // this particle's plate is turned away from the camera.
+      const Eigen::Vector2f ray = (x.position() - state.observer_position()).template head<2>().normalized();
+      const Eigen::Vector2f facing = (y.position() - given.center()).template head<2>().normalized();
+      const float cos_angle = -facing.dot(ray);
+      const float sin2_angle = pf::util::max(0.0f, 1.0f - cos_angle * cos_angle);
+      const float range_variance = params_.obs_range_variance + params_.obs_range_angle_variance * sin2_angle;
+      const float along = error[0] * ray[0] + error[1] * ray[1];
+      const float across = -error[0] * ray[1] + error[1] * ray[0];
+      return -0.5f * (along * along / range_variance + across * across / params_.obs_lateral_variance +
+                      error[2] * error[2] / x.position_diagonal_covariance()[2]) -
+             0.5f * logf(range_variance);
     };
 
     if (!state.plate_two().has_value()) {
       const float pr_visibility = helper::log_sigmoid(logit_visibility_0) + helper::log_sigmoid(-logit_visibility_1) +
                                   helper::log_sigmoid(-logit_visibility_2) + helper::log_sigmoid(-logit_visibility_3);
 
-      return pr_visibility + log_p_of(state.plate_one(), pred_0);
+      if (!params_.assoc_best) return pr_visibility + log_p_of(state.plate_one(), pred_0);
+      const float pr_visibility_1 = helper::log_sigmoid(-logit_visibility_0) + helper::log_sigmoid(logit_visibility_1) +
+                                    helper::log_sigmoid(-logit_visibility_2) + helper::log_sigmoid(-logit_visibility_3);
+      return pf::util::max(pr_visibility + log_p_of(state.plate_one(), pred_0),
+                           pr_visibility_1 + log_p_of(state.plate_one(), pred_1));
     }
 
     const float log_pr_visibility = helper::log_sigmoid(logit_visibility_0) + helper::log_sigmoid(logit_visibility_1) +
@@ -144,23 +165,33 @@ class particle_filter_configuration {
 
   PF_TARGET_ONLY_ATTRS [[nodiscard]] prediction sample_from(util::default_rv_sampler& sampler, const observation& state)
       const noexcept {
+    for (int i = 0; i < params_.seed; ++i) (void)sampler.normal_sample(1.0f);
+    // Remembered geometry (radius_prior_high/_low > 0): each pair starts at its own radius.
+    const bool remembered = params_.radius_prior_high > 0.0f && params_.radius_prior_low > 0.0f;
     const observed_plate_orbit_builder builder(params_.radius_prior, state.observer_position());
     observed_plate_orbit orbit;
     float z_offset;
     if (state.plate_two().has_value()) {
       orbit = builder.from_two_plates(state.plate_one(), *state.plate_two());
       z_offset = helper::to_z_offset(orbit.z_offset + sampler.normal_sample(params_.z_offset_prior_variance * 0.1f));
+      if (remembered) {
+        z_offset = helper::to_z_offset(params_.z_offset_prior + sampler.normal_sample(params_.z_offset_prior_variance));
+      }
     } else {
       z_offset = helper::to_z_offset(params_.z_offset_prior + sampler.normal_sample(params_.z_offset_prior_variance));
       const bool seen_plate_is_high = sampler.normal_sample(1.0f) > 0.0f;  // per particle: half each way
-      orbit = builder.from_one_plate(state.plate_one(), z_offset, seen_plate_is_high);
+      const float seen_radius =
+          !remembered ? params_.radius_prior : (seen_plate_is_high ? params_.radius_prior_high : params_.radius_prior_low);
+      orbit = observed_plate_orbit_builder(seen_radius, state.observer_position())
+                  .from_one_plate(state.plate_one(), z_offset, seen_plate_is_high);
     }
 
-    const float radius_variance =
-        state.plate_two().has_value() ? params_.radius_prior_variance_two_plates : params_.radius_prior_variance_one_plate;
+    const float radius_variance = remembered                       ? params_.radius_prior_variance_memory :
+                                  state.plate_two().has_value()    ? params_.radius_prior_variance_two_plates :
+                                                                     params_.radius_prior_variance_one_plate;
 
-    const float radius_0 = orbit.radius + sampler.normal_sample(radius_variance);
-    const float radius_1 = orbit.radius + sampler.normal_sample(radius_variance);
+    const float radius_0 = (remembered ? params_.radius_prior_high : orbit.radius) + sampler.normal_sample(radius_variance);
+    const float radius_1 = (remembered ? params_.radius_prior_low : orbit.radius) + sampler.normal_sample(radius_variance);
 
     const float orientation = orbit.orientation;
     const float orientation_velocity = sampler.normal_sample(params_.orientation_velocity_prior_variance);
@@ -168,7 +199,8 @@ class particle_filter_configuration {
     const Eigen::Vector3f center = orbit.center + sampler.normal_sample(state.plate_one().position_diagonal_covariance());
     const Eigen::Vector2f center_velocity = sampler.normal_sample(params_.center_xy_velocity_prior_diagonal_covariance);
 
-    return prediction(radius_0, radius_1, orientation, orientation_velocity, center, center_velocity, z_offset);
+    return prediction(
+        radius_0, radius_1, orientation, orientation_velocity, center, center_velocity, z_offset, params_.settled_prior);
   }
 
   PF_TARGET_ONLY_ATTRS void apply_process(const float& time_offset_seconds, util::default_rv_sampler& sampler, prediction& state)
@@ -201,7 +233,9 @@ class particle_filter_configuration {
         params_.radius_mode,
         params_.radius_prior,
         params_.radius_reversion_time,
-        params_.relabel_at_zero);
+        params_.relabel_at_zero,
+        params_.lock_time,
+        params_.lock_floor);
   }
 
   particle_filter_configuration(const particle_filter_configuration_parameters& params) noexcept : params_{params} {}
