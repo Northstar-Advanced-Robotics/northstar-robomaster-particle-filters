@@ -29,6 +29,16 @@ struct most_likely_particle_reduction_impl {
   using state_type = pf::filter::particle_reduction_state<prediction>;
   static constexpr float pi = M_PI;
 
+  bool swap_labelings = false;
+
+  struct labeling {
+    float orientation;
+    float radius_0;
+    float radius_1;
+    float z_offset;  // signed here: negative means pair 1 is the high one
+    bool relabeled;
+  };
+
   PF_TARGET_ONLY_ATTRS [[nodiscard]] inline state_type operator()(const state_type& a, const state_type& b) const noexcept {
     // this does not necessarily provide the correct mean in the MLE sense,
     // though it gives a reasonable approximation for most inputs.
@@ -36,32 +46,47 @@ struct most_likely_particle_reduction_impl {
     const prediction a_particle = a.most_likely_particle();
     const prediction b_particle = b.most_likely_particle();
 
-    // Symmetry period is pi (180 deg): rotating by pi maps each plate onto its same-height
-    // opposite, so the z_offset sign is preserved and needs no candidate-specific swap.
-    const pf::util::device_array<float, 3> candidates = {
-        a_particle.orientation() + 0.0f * pi,
-        a_particle.orientation() + 1.0f * pi,
-        a_particle.orientation() - 1.0f * pi,
+    // Rotating by pi maps each plate onto its same-height opposite: the same labeling. Rotating by
+    // +-pi/2 relabels the pairs (old pair 1 becomes pair 0), so radii swap and z_offset changes sign.
+    const float a_r0 = a_particle.radius_0();
+    const float a_r1 = a_particle.radius_1();
+    const float a_dz = a_particle.z_offset();
+    const float a_o = a_particle.orientation();
+    const pf::util::device_array<labeling, 5> candidates = {
+        labeling{a_o, a_r0, a_r1, a_dz, false},
+        labeling{a_o + pi, a_r0, a_r1, a_dz, false},
+        labeling{a_o - pi, a_r0, a_r1, a_dz, false},
+        labeling{a_o + 0.5f * pi, a_r1, a_r0, -a_dz, true},
+        labeling{a_o - 0.5f * pi, a_r1, a_r0, -a_dz, true},
     };
 
     const auto target = b_particle.orientation();
-    const auto a_orientation = *candidates.minimum_by([target](const auto& orientation) { return abs(target - orientation); });
+    const float relabel_penalty = swap_labelings ? 0.0f : 1.0e9f;
+    const labeling a_l = *candidates.minimum_by([target, relabel_penalty](const labeling& l) {
+      return abs(target - l.orientation) + (l.relabeled ? relabel_penalty : 0.0f);
+    });
 
     const float alpha = static_cast<float>(b.count()) / static_cast<float>(a.count() + b.count());
     const float c_alpha = 1.0f - alpha;
 
-    const float radius_0_ = c_alpha * a_particle.radius_0() + alpha * b_particle.radius_0();
-    const float radius_1_ = c_alpha * a_particle.radius_1() + alpha * b_particle.radius_1();
+    float radius_0 = c_alpha * a_l.radius_0 + alpha * b_particle.radius_0();
+    float radius_1 = c_alpha * a_l.radius_1 + alpha * b_particle.radius_1();
+    float orientation = c_alpha * a_l.orientation + alpha * b_particle.orientation();
+    float z_offset = c_alpha * a_l.z_offset + alpha * b_particle.z_offset();
+    if (z_offset < 0.0f) {  // back to "pair 0 is the high one"
+      orientation += 0.5f * pi;
+      const float r = radius_0;
+      radius_0 = radius_1;
+      radius_1 = r;
+      z_offset = -z_offset;
+    }
 
-    const float orientation = c_alpha * a_orientation + alpha * b_particle.orientation();
     const float orientation_velocity = c_alpha * a_particle.orientation_velocity() + alpha * b_particle.orientation_velocity();
 
     const Eigen::Vector3f center = c_alpha * a_particle.center() + alpha * b_particle.center();
     const Eigen::Vector2f center_velocity = c_alpha * a_particle.center_velocity() + alpha * b_particle.center_velocity();
 
-    const float z_offset = c_alpha * a_particle.z_offset() + alpha * b_particle.z_offset();
-
-    const auto state = prediction(radius_0_, radius_1_, orientation, orientation_velocity, center, center_velocity, z_offset);
+    const auto state = prediction(radius_0, radius_1, orientation, orientation_velocity, center, center_velocity, z_offset);
     return state_type{state, a.count() + b.count()};
   }
 };
@@ -76,7 +101,7 @@ class particle_filter_configuration {
   using sampler_type = util::default_rv_sampler;
 
   [[nodiscard]] most_likely_particle_reduction_impl most_likely_particle_reduction() const noexcept {
-    return most_likely_particle_reduction_impl{};
+    return most_likely_particle_reduction_impl{params_.swap_reduction};
   }
 
   PF_TARGET_ONLY_ATTRS [[nodiscard]] float conditional_log_likelihood(
@@ -87,11 +112,12 @@ class particle_filter_configuration {
         [state](const predicted_plate& a) { return (state.observer_position() - a.position()).squaredNorm(); });
 
     const auto [pred_0, pred_1, pred_2, pred_3] = predicted_plates;
-    const Eigen::Vector3f observer_delta = state.observer_position() - given.center();
+    const Eigen::Vector3f visibility_mask{1.0f, 1.0f, params_.visibility_xy ? 0.0f : 1.0f};
+    const Eigen::Vector3f observer_delta = (state.observer_position() - given.center()).cwiseProduct(visibility_mask);
 
     const auto [logit_visibility_0, logit_visibility_1, logit_visibility_2, logit_visibility_3] =
         predicted_plates.transformed([&, this](const predicted_plate& plate) {
-          const Eigen::Vector3f plate_delta = plate.position() - given.center();
+          const Eigen::Vector3f plate_delta = (plate.position() - given.center()).cwiseProduct(visibility_mask);
           const float similarity = observer_delta.dot(plate_delta) / (observer_delta.norm() * plate_delta.norm());
           return params_.visibility_logit_coefficient * similarity;
         });
@@ -171,7 +197,11 @@ class particle_filter_configuration {
         center_z_position_noise,
         z_offset_noise,
         center_xy_velocity_noise_0,
-        center_xy_velocity_noise_1);
+        center_xy_velocity_noise_1,
+        params_.radius_mode,
+        params_.radius_prior,
+        params_.radius_reversion_time,
+        params_.relabel_at_zero);
   }
 
   particle_filter_configuration(const particle_filter_configuration_parameters& params) noexcept : params_{params} {}

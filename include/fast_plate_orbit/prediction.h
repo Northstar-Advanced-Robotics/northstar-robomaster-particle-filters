@@ -108,7 +108,11 @@ class prediction {
       const float& center_z_position_noise,
       const float& z_offset_noise,
       const Eigen::Vector2f& center_xy_velocity_noise_0,
-      const Eigen::Vector2f& center_xy_velocity_noise_1) noexcept {
+      const Eigen::Vector2f& center_xy_velocity_noise_1,
+      const int& radius_mode = 0,
+      const float& radius_prior = 0.0f,
+      const float& radius_reversion_time = 1.0f,
+      const bool& relabel_at_zero = false) noexcept {
     static constexpr float one_half = 1.0 / 2.0;
     static constexpr float one_twelfth = 1.0 / 12.0;
 
@@ -117,9 +121,10 @@ class prediction {
     const float center_z_position_noise_scale = radius_noise_scale;
     const float position_noise_scale = sqrtf(one_twelfth) * powf(velocity_noise_scale, 3);
 
-    bool change_radius = std::fabs(orientation_velocity_) > 2;
-    const float d_radius_0 = change_radius * radius_noise_scale * radius_0_noise;
-    const float d_radius_1 = change_radius * radius_noise_scale * radius_1_noise;
+    const float radius_noise_gain = (radius_mode != 0 || fabsf(orientation_velocity_) > 2.0f) ? 1.0f : 0.0f;
+    const float radius_pull = radius_mode == 2 ? pf::util::min(1.0f, time_offset_seconds / radius_reversion_time) : 0.0f;
+    const float d_radius_0 = radius_noise_gain * radius_noise_scale * radius_0_noise - radius_pull * (radius_0_ - radius_prior);
+    const float d_radius_1 = radius_noise_gain * radius_noise_scale * radius_1_noise - radius_pull * (radius_1_ - radius_prior);
 
     const float d_center_z = center_z_position_noise_scale * center_z_position_noise;
 
@@ -144,7 +149,16 @@ class prediction {
 
     center_ = center_ + d_center;
 
-    z_offset_ = helper::to_z_offset(z_offset_ + d_z_offset);
+    z_offset_ = z_offset_ + d_z_offset;
+    if (relabel_at_zero && z_offset_ < 0.0f) {
+      // Pair 1 has become the higher one: call it pair 0. Same plates, so nothing jumps.
+      z_offset_ = -z_offset_;
+      orientation_ = helper::to_orientation(orientation_ + static_cast<float>(M_PI_2));
+      const float radius_0 = radius_0_;
+      radius_0_ = radius_1_;
+      radius_1_ = radius_0;
+    }
+    z_offset_ = helper::to_z_offset(z_offset_);
 
     center_velocity_ = center_velocity_ + d_center_velocity;
   }
