@@ -87,6 +87,15 @@ struct particle_filter_configuration_parameters {
   // particles that don't chase measurement noise; a dodging one by maneuvering ones.
   float maneuver_velocity_variance = 0.0f;
   float maneuver_switch_rate = 2.0f;
+  // yaw_variance > 0: plates measured with a facing direction (PnP's) are also scored on it,
+  // against the particle's plate (rad^2, + yaw_variance_angle * sin^2 of the plate's angle to the
+  // camera; PnP's yaw gets worse as the plate turns away). yaw_outlier_weight keeps the rare wild
+  // PnP yaw from overruling everything. yaw_init: a filter started from one plate takes its
+  // orientation and center from that plate's yaw rather than assuming it faces the camera.
+  float yaw_variance = 0.0f;
+  float yaw_variance_angle = 0.0f;
+  float yaw_outlier_weight = 0.05f;
+  bool yaw_init = false;
 };
 
 }  // namespace fast_plate_orbit

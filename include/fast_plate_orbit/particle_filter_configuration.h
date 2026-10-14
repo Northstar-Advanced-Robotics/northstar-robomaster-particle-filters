@@ -126,10 +126,24 @@ class particle_filter_configuration {
           return params_.visibility_logit_coefficient * (similarity - params_.visibility_threshold);
         });
 
+    // The plate's measured facing direction against the particle's plate (wrapped to +-pi), with a
+    // floor for the occasional wild PnP yaw.
+    auto log_p_yaw = [&, this](const observed_plate& x, const predicted_plate& y) {
+      if (params_.yaw_variance <= 0.0f || !x.has_yaw()) return 0.0f;
+      const Eigen::Vector2f facing = (y.position() - given.center()).template head<2>();
+      float error = x.yaw() - atan2f(facing[1], facing[0]);
+      error = error - 6.2831853f * floorf((error + 3.1415927f) / 6.2831853f);
+      const Eigen::Vector2f to_observer = (state.observer_position() - y.position()).template head<2>();
+      const float cos_angle = facing.dot(to_observer) / (facing.norm() * to_observer.norm() + 1e-6f);
+      const float variance =
+          params_.yaw_variance + params_.yaw_variance_angle * pf::util::max(0.0f, 1.0f - cos_angle * cos_angle);
+      return logf(params_.yaw_outlier_weight + (1.0f - params_.yaw_outlier_weight) * expf(-0.5f * error * error / variance));
+    };
+
     auto log_p_of = [&, this](const observed_plate& x, const predicted_plate& y) {
       const auto error = (x.position() - y.position()).eval();
       if (params_.obs_model == 0) {
-        return sampler.unnormalized_normal_log_density(x.position_diagonal_covariance(), error);
+        return sampler.unnormalized_normal_log_density(x.position_diagonal_covariance(), error) + log_p_yaw(x, y);
       }
       // Along and across the camera ray (horizontally); along it, the less reliable the further
       // this particle's plate is turned away from the camera.
@@ -142,7 +156,7 @@ class particle_filter_configuration {
       const float across = -error[0] * ray[1] + error[1] * ray[0];
       return -0.5f * (along * along / range_variance + across * across / params_.obs_lateral_variance +
                       error[2] * error[2] / x.position_diagonal_covariance()[2]) -
-             0.5f * logf(range_variance);
+             0.5f * logf(range_variance) + log_p_yaw(x, y);
     };
 
     if (!state.plate_two().has_value()) {
@@ -193,6 +207,13 @@ class particle_filter_configuration {
           !remembered ? params_.radius_prior : (seen_plate_is_high ? params_.radius_prior_high : params_.radius_prior_low);
       orbit = observed_plate_orbit_builder(seen_radius, state.observer_position())
                   .from_one_plate(state.plate_one(), z_offset, seen_plate_is_high);
+      if (params_.yaw_init && params_.yaw_variance > 0.0f && state.plate_one().has_yaw()) {
+        // The plate says which way it faces: the center is behind it along that direction.
+        const float yaw = state.plate_one().yaw() + sampler.normal_sample(params_.yaw_variance);
+        orbit.center = state.plate_one().position() - seen_radius * Eigen::Vector3f{cosf(yaw), sinf(yaw), 0.0f};
+        orbit.center[2] += seen_plate_is_high ? -z_offset : z_offset;
+        orbit.orientation = seen_plate_is_high ? yaw : yaw + static_cast<float>(M_PI_2);
+      }
     }
 
     const float radius_variance = remembered                       ? params_.radius_prior_variance_memory :
