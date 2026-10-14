@@ -8,6 +8,7 @@ struct observed_plate_orbit {
   float radius;
   float orientation;
   Eigen::Vector3f center;
+  float z_offset;
 };
 
-}
+}  // namespace fast_plate_orbit

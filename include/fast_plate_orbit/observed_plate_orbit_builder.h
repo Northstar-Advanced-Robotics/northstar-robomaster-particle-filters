@@ -15,21 +15,29 @@ class observed_plate_orbit_builder {
   Eigen::Vector3f observer_position_;
 
  public:
-  PF_TARGET_ATTRS observed_plate_orbit from_one_plate(const observed_plate& plate_one) const noexcept {
+  PF_TARGET_ATTRS observed_plate_orbit
+  from_one_plate(const observed_plate& plate_one, const float& z_offset, const bool& seen_plate_is_high) const noexcept {
     const Eigen::Vector3f observer_relative_position = plate_one.position() - observer_position_;
     const Eigen::Vector3f projected_relative{observer_relative_position[0], observer_relative_position[1], 0.0};
-    const Eigen::Vector3f predicted_center = plate_one.position() + radius_prior_ * projected_relative.normalized();
+    Eigen::Vector3f predicted_center = plate_one.position() + radius_prior_ * projected_relative.normalized();
     const Eigen::Vector3f center_relative_position = plate_one.position() - predicted_center;
 
     const float predicted_orientation = atan2(center_relative_position[1], center_relative_position[0]);
 
-    return observed_plate_orbit{radius_prior_, predicted_orientation, predicted_center};
+    predicted_center.z() += seen_plate_is_high ? -z_offset : z_offset;
+    const float orientation = seen_plate_is_high ? predicted_orientation : predicted_orientation + float(M_PI_2);
+
+    return observed_plate_orbit{radius_prior_, orientation, predicted_center, z_offset};
   }
 
   PF_TARGET_ATTRS observed_plate_orbit
   from_two_plates(const observed_plate& plate_one, const observed_plate& plate_two) const noexcept {
-    const Eigen::Vector3f midpoint = 0.5f * (plate_one.position() + plate_two.position());
-    const Eigen::Vector3f one_to_two = plate_two.position() - plate_one.position();
+    const bool one_is_high = plate_one.position().z() >= plate_two.position().z();
+    const observed_plate& high = one_is_high ? plate_one : plate_two;
+    const observed_plate& low = one_is_high ? plate_two : plate_one;
+
+    const Eigen::Vector3f midpoint = 0.5f * (high.position() + low.position());
+    const Eigen::Vector3f one_to_two = low.position() - high.position();
     const Eigen::Vector3f delta = 0.5f * (Eigen::Vector3f{} << -one_to_two[1], one_to_two[0], 0.0f).finished();
 
     const Eigen::Vector3f predicted_center =
@@ -38,15 +46,16 @@ class observed_plate_orbit_builder {
         });
 
     const float predicted_radius = M_SQRT2 * delta.norm();
-    const Eigen::Vector3f center_relative_position = plate_one.position() - predicted_center;
+    const Eigen::Vector3f center_relative_position = high.position() - predicted_center;
 
     const float predicted_orientation = atan2(center_relative_position[1], center_relative_position[0]);
 
-    return observed_plate_orbit{predicted_radius, predicted_orientation, predicted_center};
+    return observed_plate_orbit{
+        predicted_radius, predicted_orientation, predicted_center, 0.5f * (high.position().z() - low.position().z())};
   }
 
   PF_TARGET_ATTRS observed_plate_orbit_builder(const float& radius_prior, const Eigen::Vector3f& observer_position) noexcept
       : radius_prior_{radius_prior}, observer_position_{observer_position} {}
 };
 
-}  // namespace plate_orbit
+}  // namespace fast_plate_orbit

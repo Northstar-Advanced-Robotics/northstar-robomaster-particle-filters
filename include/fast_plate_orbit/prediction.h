@@ -26,8 +26,8 @@ PF_TARGET_ATTRS [[nodiscard]] inline float to_orientation(const float& angle_rad
 }
 
 PF_TARGET_ATTRS [[nodiscard]] inline float to_z_offset(const float& z_offset) noexcept {
-  constexpr float offset_limit = 0.05f;
-  return pf::util::max(-offset_limit, pf::util::min(offset_limit, z_offset));
+  constexpr float offset_limit = 0.06f;
+  return pf::util::min(offset_limit, fabsf(z_offset));
 }
 
 PF_TARGET_ATTRS [[nodiscard]] inline Eigen::Vector3f rpad_zero(const Eigen::Vector2f& vector) noexcept {
@@ -77,9 +77,8 @@ class prediction {
       const float angle = value.angle_offset + orientation_;
 
       const Eigen::Vector3f predicted_plate_position =
-          center_ + (Eigen::Vector3f{} << value.radius * cosf(angle), value.radius * sinf(angle),
-                     value.z_sign * z_offset_)
-                        .finished();
+          center_ +
+          (Eigen::Vector3f{} << value.radius * cosf(angle), value.radius * sinf(angle), value.z_sign * z_offset_).finished();
 
       const Eigen::Vector3f predicted_plate_velocity =
           helper::rpad_zero(center_velocity_) +
@@ -107,6 +106,7 @@ class prediction {
       const float& orientation_velocity_noise_0,
       const float& orientation_velocity_noise_1,
       const float& center_z_position_noise,
+      const float& z_offset_noise,
       const Eigen::Vector2f& center_xy_velocity_noise_0,
       const Eigen::Vector2f& center_xy_velocity_noise_1) noexcept {
     static constexpr float one_half = 1.0 / 2.0;
@@ -120,8 +120,10 @@ class prediction {
     bool change_radius = std::fabs(orientation_velocity_) > 2;
     const float d_radius_0 = change_radius * radius_noise_scale * radius_0_noise;
     const float d_radius_1 = change_radius * radius_noise_scale * radius_1_noise;
-    // z_offset_ is a fixed geometry constant -- it is never noised or updated.
+
     const float d_center_z = center_z_position_noise_scale * center_z_position_noise;
+
+    const float d_z_offset = radius_noise_scale * z_offset_noise;
 
     const float d_orientation_velocity = velocity_noise_scale * orientation_velocity_noise_1;
     const float d_orientation = time_offset_seconds * orientation_velocity_ +
@@ -141,6 +143,9 @@ class prediction {
     orientation_velocity_ = orientation_velocity_ + d_orientation_velocity;
 
     center_ = center_ + d_center;
+
+    z_offset_ = helper::to_z_offset(z_offset_ + d_z_offset);
+
     center_velocity_ = center_velocity_ + d_center_velocity;
   }
 

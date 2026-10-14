@@ -61,7 +61,7 @@ struct most_likely_particle_reduction_impl {
 
     const float z_offset = c_alpha * a_particle.z_offset() + alpha * b_particle.z_offset();
 
-    const auto state = prediction(radius_0_, radius_1_ , orientation, orientation_velocity, center, center_velocity, z_offset);
+    const auto state = prediction(radius_0_, radius_1_, orientation, orientation_velocity, center, center_velocity, z_offset);
     return state_type{state, a.count() + b.count()};
   }
 };
@@ -119,10 +119,16 @@ class particle_filter_configuration {
   PF_TARGET_ONLY_ATTRS [[nodiscard]] prediction sample_from(util::default_rv_sampler& sampler, const observation& state)
       const noexcept {
     const observed_plate_orbit_builder builder(params_.radius_prior, state.observer_position());
-
-    const observed_plate_orbit orbit = state.plate_two().has_value() ?
-                                           builder.from_two_plates(state.plate_one(), *state.plate_two()) :
-                                           builder.from_one_plate(state.plate_one());
+    observed_plate_orbit orbit;
+    float z_offset;
+    if (state.plate_two().has_value()) {
+      orbit = builder.from_two_plates(state.plate_one(), *state.plate_two());
+      z_offset = helper::to_z_offset(orbit.z_offset + sampler.normal_sample(params_.z_offset_prior_variance * 0.1f));
+    } else {
+      z_offset = helper::to_z_offset(params_.z_offset_prior + sampler.normal_sample(params_.z_offset_prior_variance));
+      const bool seen_plate_is_high = sampler.normal_sample(1.0f) > 0.0f;  // per particle: half each way
+      orbit = builder.from_one_plate(state.plate_one(), z_offset, seen_plate_is_high);
+    }
 
     const float radius_variance =
         state.plate_two().has_value() ? params_.radius_prior_variance_two_plates : params_.radius_prior_variance_one_plate;
@@ -136,9 +142,6 @@ class particle_filter_configuration {
     const Eigen::Vector3f center = orbit.center + sampler.normal_sample(state.plate_one().position_diagonal_covariance());
     const Eigen::Vector2f center_velocity = sampler.normal_sample(params_.center_xy_velocity_prior_diagonal_covariance);
 
-    // Fixed geometry: every particle gets the known plate height offset (not estimated).
-    const float z_offset = params_.plate_height_offset;
-
     return prediction(radius_0, radius_1, orientation, orientation_velocity, center, center_velocity, z_offset);
   }
 
@@ -150,6 +153,8 @@ class particle_filter_configuration {
     const float orientation_velocity_noise_1 = sampler.normal_sample(params_.orientation_velocity_process_variance);
 
     const float center_z_position_noise = sampler.normal_sample(params_.center_z_position_process_variance);
+
+    const float z_offset_noise = sampler.normal_sample(params_.z_offset_process_variance);
 
     const Eigen::Vector2f center_xy_velocity_noise_0 =
         sampler.normal_sample(params_.center_xy_velocity_process_diagonal_covariance);
@@ -164,6 +169,7 @@ class particle_filter_configuration {
         orientation_velocity_noise_0,
         orientation_velocity_noise_1,
         center_z_position_noise,
+        z_offset_noise,
         center_xy_velocity_noise_0,
         center_xy_velocity_noise_1);
   }
