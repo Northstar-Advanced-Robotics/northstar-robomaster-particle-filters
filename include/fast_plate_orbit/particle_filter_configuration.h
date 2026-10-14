@@ -135,8 +135,8 @@ class particle_filter_configuration {
       error = error - 6.2831853f * floorf((error + 3.1415927f) / 6.2831853f);
       const Eigen::Vector2f to_observer = (state.observer_position() - y.position()).template head<2>();
       const float cos_angle = facing.dot(to_observer) / (facing.norm() * to_observer.norm() + 1e-6f);
-      const float variance =
-          params_.yaw_variance + params_.yaw_variance_angle * pf::util::max(0.0f, 1.0f - cos_angle * cos_angle);
+      const float variance = (x.yaw_variance() > 0.0f ? x.yaw_variance() : params_.yaw_variance) +
+                             params_.yaw_variance_angle * pf::util::max(0.0f, 1.0f - cos_angle * cos_angle);
       return logf(params_.yaw_outlier_weight + (1.0f - params_.yaw_outlier_weight) * expf(-0.5f * error * error / variance));
     };
 
@@ -207,9 +207,11 @@ class particle_filter_configuration {
           !remembered ? params_.radius_prior : (seen_plate_is_high ? params_.radius_prior_high : params_.radius_prior_low);
       orbit = observed_plate_orbit_builder(seen_radius, state.observer_position())
                   .from_one_plate(state.plate_one(), z_offset, seen_plate_is_high);
-      if (params_.yaw_init && params_.yaw_variance > 0.0f && state.plate_one().has_yaw()) {
+      const float yaw_variance =
+          state.plate_one().yaw_variance() > 0.0f ? state.plate_one().yaw_variance() : params_.yaw_variance;
+      if (params_.yaw_init && params_.yaw_variance > 0.0f && state.plate_one().has_yaw() && yaw_variance < 0.3f) {
         // The plate says which way it faces: the center is behind it along that direction.
-        const float yaw = state.plate_one().yaw() + sampler.normal_sample(params_.yaw_variance);
+        const float yaw = state.plate_one().yaw() + sampler.normal_sample(yaw_variance);
         orbit.center = state.plate_one().position() - seen_radius * Eigen::Vector3f{cosf(yaw), sinf(yaw), 0.0f};
         orbit.center[2] += seen_plate_is_high ? -z_offset : z_offset;
         orbit.orientation = seen_plate_is_high ? yaw : yaw + static_cast<float>(M_PI_2);
