@@ -41,6 +41,11 @@ struct particle_filter_configuration_parameters {
   // Plate visibility from horizontal directions only (as plate_orbit_v2), so plate heights and the
   // observer's height don't change how visible a plate looks.
   bool visibility_xy = false;
+  // Visibility logit = visibility_logit_coefficient * (cos(plate angle to the camera) -
+  // visibility_threshold). With a large coefficient and a threshold near the angle the detector
+  // stops seeing plates, the term no longer prefers plates square to the camera; it only rules out
+  // plates that couldn't be seen (or that must have been).
+  float visibility_threshold = 0.0f;
   // obs_model 1: a plate's measured position is precise across the line of sight
   // (obs_lateral_variance) and less so along it (obs_range_variance), the more so the further the
   // plate is turned from the camera (+ obs_range_angle_variance * sin^2 of that angle, from the
@@ -65,6 +70,11 @@ struct particle_filter_configuration_parameters {
   float radius_prior_low = 0.0f;
   float radius_prior_variance_memory = 0.0001f;
   float settled_prior = 0.0f;
+  // center_z_prior_variance > 0: the robot's center was at height center_z_prior. A lone first
+  // plate then says which pair it belongs to (its height minus or plus z_offset_prior, whichever is
+  // nearer that center), instead of half the particles guessing each way.
+  float center_z_prior = 0.0f;
+  float center_z_prior_variance = 0.0f;
 };
 
 }  // namespace fast_plate_orbit

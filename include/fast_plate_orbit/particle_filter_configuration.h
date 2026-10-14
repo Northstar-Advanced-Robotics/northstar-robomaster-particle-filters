@@ -122,7 +122,7 @@ class particle_filter_configuration {
         predicted_plates.transformed([&, this](const predicted_plate& plate) {
           const Eigen::Vector3f plate_delta = (plate.position() - given.center()).cwiseProduct(visibility_mask);
           const float similarity = observer_delta.dot(plate_delta) / (observer_delta.norm() * plate_delta.norm());
-          return params_.visibility_logit_coefficient * similarity;
+          return params_.visibility_logit_coefficient * (similarity - params_.visibility_threshold);
         });
 
     auto log_p_of = [&, this](const observed_plate& x, const predicted_plate& y) {
@@ -179,7 +179,15 @@ class particle_filter_configuration {
       }
     } else {
       z_offset = helper::to_z_offset(params_.z_offset_prior + sampler.normal_sample(params_.z_offset_prior_variance));
-      const bool seen_plate_is_high = sampler.normal_sample(1.0f) > 0.0f;  // per particle: half each way
+      bool seen_plate_is_high = sampler.normal_sample(1.0f) > 0.0f;  // per particle: half each way
+      if (params_.center_z_prior_variance > 0.0f) {
+        // Remembered center height: P(high) from how well each choice puts the center there.
+        const float plate_z = state.plate_one().position()[2];
+        const float miss_high = plate_z - z_offset - params_.center_z_prior;
+        const float miss_low = plate_z + z_offset - params_.center_z_prior;
+        const float logit = 0.5f * (miss_low * miss_low - miss_high * miss_high) / params_.center_z_prior_variance;
+        seen_plate_is_high = sampler.normal_sample(1.0f) < logit * 0.6266f;  // probit(x) ~ logistic(1.6 x)
+      }
       const float seen_radius =
           !remembered ? params_.radius_prior : (seen_plate_is_high ? params_.radius_prior_high : params_.radius_prior_low);
       orbit = observed_plate_orbit_builder(seen_radius, state.observer_position())
