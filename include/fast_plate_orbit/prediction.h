@@ -48,6 +48,7 @@ class prediction {
   float radius_1_;
   float z_offset_;  // half the height difference between the two alternating plate pairs
   float settled_;   // seconds this particle has watched the robot spin (geometry settles with it)
+  float maneuver_;  // 1 while this particle's robot is maneuvering (see maneuver_velocity_variance)
 
   float orientation_;
   float orientation_velocity_;
@@ -98,7 +99,8 @@ class prediction {
         center_ + time_offset_seconds * helper::rpad_zero(center_velocity_),
         center_velocity_,
         z_offset_,
-        settled_);
+        settled_,
+        maneuver_);
   }
 
   PF_TARGET_ATTRS void update_state(
@@ -181,6 +183,8 @@ class prediction {
   PF_TARGET_ATTRS [[nodiscard]] const float& radius_1() const noexcept { return radius_1_; }
   PF_TARGET_ATTRS [[nodiscard]] const float& z_offset() const noexcept { return z_offset_; }
   PF_TARGET_ATTRS [[nodiscard]] const float& settled() const noexcept { return settled_; }
+  PF_TARGET_ATTRS [[nodiscard]] const float& maneuver() const noexcept { return maneuver_; }
+  PF_TARGET_ATTRS void set_maneuver(const float& maneuver) noexcept { maneuver_ = maneuver; }
   PF_TARGET_ATTRS [[nodiscard]] const float& orientation() const noexcept { return orientation_; }
   PF_TARGET_ATTRS [[nodiscard]] const float& orientation_velocity() const noexcept { return orientation_velocity_; }
   PF_TARGET_ATTRS [[nodiscard]] const Eigen::Vector3f& center() const noexcept { return center_; }
@@ -191,6 +195,7 @@ class prediction {
         radius_1_{0.0f},
         z_offset_{0.0f},
         settled_{0.0f},
+        maneuver_{0.0f},
         orientation_{0.0f},
         orientation_velocity_{0.0f},
         center_{Eigen::Vector3f::Zero()},
@@ -204,11 +209,13 @@ class prediction {
       const Eigen::Vector3f& center,
       const Eigen::Vector2f& center_velocity,
       const float& z_offset,
-      const float& settled = 0.0f) noexcept
+      const float& settled = 0.0f,
+      const float& maneuver = 0.0f) noexcept
       : radius_0_{helper::to_radius(radius_0)},
         radius_1_{helper::to_radius(radius_1)},
         z_offset_{helper::to_z_offset(z_offset)},
         settled_{settled},
+        maneuver_{maneuver},
         orientation_{helper::to_orientation(orientation)},
         orientation_velocity_{orientation_velocity},
         center_{center},

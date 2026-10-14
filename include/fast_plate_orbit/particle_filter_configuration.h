@@ -87,9 +87,10 @@ struct most_likely_particle_reduction_impl {
     const Eigen::Vector2f center_velocity = c_alpha * a_particle.center_velocity() + alpha * b_particle.center_velocity();
 
     const float settled = c_alpha * a_particle.settled() + alpha * b_particle.settled();
+    const float maneuver = c_alpha * a_particle.maneuver() + alpha * b_particle.maneuver();
 
-    const auto state =
-        prediction(radius_0, radius_1, orientation, orientation_velocity, center, center_velocity, z_offset, settled);
+    const auto state = prediction(
+        radius_0, radius_1, orientation, orientation_velocity, center, center_velocity, z_offset, settled, maneuver);
     return state_type{state, a.count() + b.count()};
   }
 };
@@ -207,8 +208,17 @@ class particle_filter_configuration {
     const Eigen::Vector3f center = orbit.center + sampler.normal_sample(state.plate_one().position_diagonal_covariance());
     const Eigen::Vector2f center_velocity = sampler.normal_sample(params_.center_xy_velocity_prior_diagonal_covariance);
 
+    const float maneuver = params_.maneuver_velocity_variance > 0.0f && sampler.normal_sample(1.0f) > 0.0f ? 1.0f : 0.0f;
     return prediction(
-        radius_0, radius_1, orientation, orientation_velocity, center, center_velocity, z_offset, params_.settled_prior);
+        radius_0,
+        radius_1,
+        orientation,
+        orientation_velocity,
+        center,
+        center_velocity,
+        z_offset,
+        params_.settled_prior,
+        maneuver);
   }
 
   PF_TARGET_ONLY_ATTRS void apply_process(const float& time_offset_seconds, util::default_rv_sampler& sampler, prediction& state)
@@ -222,11 +232,23 @@ class particle_filter_configuration {
 
     const float z_offset_noise = sampler.normal_sample(params_.z_offset_process_variance);
 
-    const Eigen::Vector2f center_xy_velocity_noise_0 =
+    Eigen::Vector2f center_xy_velocity_noise_0 =
         sampler.normal_sample(params_.center_xy_velocity_process_diagonal_covariance);
 
-    const Eigen::Vector2f center_xy_velocity_noise_1 =
+    Eigen::Vector2f center_xy_velocity_noise_1 =
         sampler.normal_sample(params_.center_xy_velocity_process_diagonal_covariance);
+
+    if (params_.maneuver_velocity_variance > 0.0f) {
+      // Calm or maneuvering, switching now and then (uniform from a normal through its CDF).
+      const float u = 0.5f * erfcf(-sampler.normal_sample(1.0f) * static_cast<float>(M_SQRT1_2));
+      if (u < params_.maneuver_switch_rate * time_offset_seconds) state.set_maneuver(1.0f - state.maneuver());
+      if (state.maneuver() > 0.5f) {
+        const float gain =
+            sqrtf(params_.maneuver_velocity_variance / params_.center_xy_velocity_process_diagonal_covariance[0]);
+        center_xy_velocity_noise_0 *= gain;
+        center_xy_velocity_noise_1 *= gain;
+      }
+    }
 
     state.update_state(
         time_offset_seconds,

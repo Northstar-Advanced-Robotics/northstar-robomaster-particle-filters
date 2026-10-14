@@ -75,6 +75,12 @@ struct particle_filter_configuration_parameters {
   // nearer that center), instead of half the particles guessing each way.
   float center_z_prior = 0.0f;
   float center_z_prior_variance = 0.0f;
+  // maneuver_velocity_variance > 0: each particle is either calm (center velocity noise
+  // center_xy_velocity_process_diagonal_covariance) or maneuvering (this variance, per axis), and
+  // switches at maneuver_switch_rate per second. A robot spinning in place is followed by calm
+  // particles that don't chase measurement noise; a dodging one by maneuvering ones.
+  float maneuver_velocity_variance = 0.0f;
+  float maneuver_switch_rate = 2.0f;
 };
 
 }  // namespace fast_plate_orbit
