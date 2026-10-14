@@ -96,6 +96,9 @@ struct particle_filter_configuration_parameters {
   float yaw_variance_angle = 0.0f;
   float yaw_outlier_weight = 0.05f;
   bool yaw_init = false;
+  // position_outlier_weight > 0: a plate's position is scored log(w + (1 - w) * Gaussian), so a
+  // wild PnP position (far plates' range has a heavy tail) can't drag the whole filter.
+  float position_outlier_weight = 0.0f;
 };
 
 }  // namespace fast_plate_orbit

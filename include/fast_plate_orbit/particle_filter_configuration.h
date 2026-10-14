@@ -143,7 +143,11 @@ class particle_filter_configuration {
     auto log_p_of = [&, this](const observed_plate& x, const predicted_plate& y) {
       const auto error = (x.position() - y.position()).eval();
       if (params_.obs_model == 0) {
-        return sampler.unnormalized_normal_log_density(x.position_diagonal_covariance(), error) + log_p_yaw(x, y);
+        float log_p = sampler.unnormalized_normal_log_density(x.position_diagonal_covariance(), error);
+        if (params_.position_outlier_weight > 0.0f) {
+          log_p = logf(params_.position_outlier_weight + (1.0f - params_.position_outlier_weight) * expf(log_p));
+        }
+        return log_p + log_p_yaw(x, y);
       }
       // Along and across the camera ray (horizontally); along it, the less reliable the further
       // this particle's plate is turned away from the camera.
