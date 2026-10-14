@@ -252,8 +252,8 @@ class particle_filter_configuration {
       const noexcept {
     const float radius_0_noise = sampler.normal_sample(params_.radius_process_variance);
     const float radius_1_noise = sampler.normal_sample(params_.radius_process_variance);
-    const float orientation_velocity_noise_0 = sampler.normal_sample(params_.orientation_velocity_process_variance);
-    const float orientation_velocity_noise_1 = sampler.normal_sample(params_.orientation_velocity_process_variance);
+    float orientation_velocity_noise_0 = sampler.normal_sample(params_.orientation_velocity_process_variance);
+    float orientation_velocity_noise_1 = sampler.normal_sample(params_.orientation_velocity_process_variance);
 
     const float center_z_position_noise = sampler.normal_sample(params_.center_z_position_process_variance);
 
@@ -274,6 +274,10 @@ class particle_filter_configuration {
             sqrtf(params_.maneuver_velocity_variance / params_.center_xy_velocity_process_diagonal_covariance[0]);
         center_xy_velocity_noise_0 *= gain;
         center_xy_velocity_noise_1 *= gain;
+      } else if (params_.spin_calm_variance > 0.0f) {
+        const float spin_gain = sqrtf(params_.spin_calm_variance / params_.orientation_velocity_process_variance);
+        orientation_velocity_noise_0 *= spin_gain;
+        orientation_velocity_noise_1 *= spin_gain;
       }
     }
 

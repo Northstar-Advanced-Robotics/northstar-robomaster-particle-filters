@@ -87,6 +87,11 @@ struct particle_filter_configuration_parameters {
   // particles that don't chase measurement noise; a dodging one by maneuvering ones.
   float maneuver_velocity_variance = 0.0f;
   float maneuver_switch_rate = 2.0f;
+  // spin_calm_variance > 0 (with the maneuver modes on): calm particles' spin rate changes with this
+  // process variance, maneuvering ones with orientation_velocity_process_variance. A robot holding
+  // its spin (or still) then isn't given spin-rate noise to chase, which the aim's lead turns into
+  // jitter; one changing its spin is followed by the maneuvering particles.
+  float spin_calm_variance = 0.0f;
   // yaw_variance > 0: plates measured with a facing direction (PnP's) are also scored on it,
   // against the particle's plate (rad^2, + yaw_variance_angle * sin^2 of the plate's angle to the
   // camera; PnP's yaw gets worse as the plate turns away). yaw_outlier_weight keeps the rare wild
