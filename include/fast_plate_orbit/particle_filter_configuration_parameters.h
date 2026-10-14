@@ -30,7 +30,9 @@ struct particle_filter_configuration_parameters {
   int seed = 0;
   // radius_mode 0: radius noise only while |omega| > 2 rad/s; 1: always; 2: always, and each radius
   // relaxes toward radius_prior with time constant radius_reversion_time (s); 3: like 2, but the pull
-  // fades out as the robot spins faster (none above 3 rad/s).
+  // fades out as the robot spins faster (none above 3 rad/s); 4: radius and height-offset noise in
+  // proportion to the spin (none when still), and the pull only for particles that haven't yet
+  // watched the robot turn (settled), so a robot that stops keeps its learned geometry.
   int radius_mode = 0;
   float radius_reversion_time = 2.0f;
   // z_offset < 0 relabels the pairs (orientation + pi/2, radii swapped, z_offset negated) instead
@@ -63,6 +65,10 @@ struct particle_filter_configuration_parameters {
   // time the particle has watched the robot spin (faster than 2 rad/s, when they show).
   float lock_time = 0.0f;
   float lock_floor = 0.1f;
+  // settle_by_angle: settled counts radians the robot has turned (above 0.5 rad/s), not seconds
+  // spun above 2 rad/s, and lock_time is then in radians. Slow spinners settle too, in proportion
+  // to what they show.
+  bool settle_by_angle = false;
   // What an earlier filter learned about this robot: radius_prior_high / _low > 0 start the high
   // and low pairs there (radius_prior_variance_memory), and the particles start settled_prior
   // seconds settled. z_offset_prior / z_offset_prior_variance carry its height offset.

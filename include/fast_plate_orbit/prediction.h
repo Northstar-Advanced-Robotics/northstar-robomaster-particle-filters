@@ -14,7 +14,7 @@ namespace helper {
 
 PF_TARGET_ATTRS [[nodiscard]] inline float to_radius(const float& radius) noexcept {
   constexpr float min_radius = 0.100f;
-  constexpr float max_radius = 0.400f;
+  constexpr float max_radius = 0.500f;
   return pf::util::max(min_radius, pf::util::min(max_radius, radius));
 }
 
@@ -118,7 +118,8 @@ class prediction {
       const float& radius_reversion_time = 1.0f,
       const bool& relabel_at_zero = false,
       const float& lock_time = 0.0f,
-      const float& lock_floor = 1.0f) noexcept {
+      const float& lock_floor = 1.0f,
+      const bool& settle_by_angle = false) noexcept {
     static constexpr float one_half = 1.0 / 2.0;
     static constexpr float one_twelfth = 1.0 / 12.0;
 
@@ -127,14 +128,29 @@ class prediction {
     const float center_z_position_noise_scale = radius_noise_scale;
     const float position_noise_scale = sqrtf(one_twelfth) * powf(velocity_noise_scale, 3);
 
-    const float radius_noise_gain = (radius_mode != 0 || fabsf(orientation_velocity_) > 2.0f) ? 1.0f : 0.0f;
+    // How fast the robot turns, as a fraction of a full-information spin (1.5 rad/s): the radii and
+    // the height offset only show while it turns.
+    const float spin_fraction = pf::util::min(1.0f, fabsf(orientation_velocity_) / 1.5f);
+    const float radius_noise_gain = radius_mode == 4 ? spin_fraction :
+                                    (radius_mode != 0 || fabsf(orientation_velocity_) > 2.0f) ? 1.0f :
+                                                                                               0.0f;
     // Mode 3 pulls only while the robot isn't spinning (fully below 1 rad/s, not at all above 3),
     // when the radius can't be seen; spinning, the plates pin it down without a bias toward the prior.
     const float spin_gate = pf::util::max(0.0f, pf::util::min(1.0f, (3.0f - fabsf(orientation_velocity_)) / 2.0f));
-    const float pull_weight = radius_mode == 2 ? 1.0f : (radius_mode == 3 ? spin_gate : 0.0f);
+    // Mode 4 pulls only a particle that hasn't yet watched the robot turn (a fresh filter on a still
+    // robot); once it has, what it learned stays when the robot stops.
+    const float pull_weight = radius_mode == 2 ? 1.0f :
+                              radius_mode == 3 ? spin_gate :
+                              radius_mode == 4 ? (1.0f - spin_fraction) * expf(-settled_ / 6.2832f) :
+                                                 0.0f;
     const float radius_pull = pull_weight * pf::util::min(1.0f, time_offset_seconds / radius_reversion_time);
     // Geometry settles as the particle watches the robot spin: its noise fades toward lock_floor.
-    if (fabsf(orientation_velocity_) > 2.0f) settled_ += time_offset_seconds;
+    // settled: seconds spent spinning faster than 2 rad/s, or with settle_by_angle, radians turned.
+    if (settle_by_angle) {
+      if (fabsf(orientation_velocity_) > 0.5f) settled_ += fabsf(orientation_velocity_) * time_offset_seconds;
+    } else if (fabsf(orientation_velocity_) > 2.0f) {
+      settled_ += time_offset_seconds;
+    }
     const float lock_gain = lock_time > 0.0f ? lock_floor + (1.0f - lock_floor) * expf(-settled_ / lock_time) : 1.0f;
 
     const float d_radius_0 =
@@ -144,7 +160,7 @@ class prediction {
 
     const float d_center_z = lock_gain * center_z_position_noise_scale * center_z_position_noise;
 
-    const float d_z_offset = lock_gain * radius_noise_scale * z_offset_noise;
+    const float d_z_offset = lock_gain * (radius_mode == 4 ? spin_fraction : 1.0f) * radius_noise_scale * z_offset_noise;
 
     const float d_orientation_velocity = velocity_noise_scale * orientation_velocity_noise_1;
     const float d_orientation = time_offset_seconds * orientation_velocity_ +

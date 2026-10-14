@@ -265,7 +265,8 @@ class particle_filter_configuration {
         params_.radius_reversion_time,
         params_.relabel_at_zero,
         params_.lock_time,
-        params_.lock_floor);
+        params_.lock_floor,
+        params_.settle_by_angle);
   }
 
   particle_filter_configuration(const particle_filter_configuration_parameters& params) noexcept : params_{params} {}
