@@ -26,7 +26,8 @@ struct particle_filter_configuration_parameters {
 
   // Switches for A/B runs in the simulator; the defaults are the behavior before they existed.
   // radius_mode 0: radius noise only while |omega| > 2 rad/s; 1: always; 2: always, and each radius
-  // relaxes toward radius_prior with time constant radius_reversion_time (s).
+  // relaxes toward radius_prior with time constant radius_reversion_time (s); 3: like 2, but the pull
+  // fades out as the robot spins faster (none above 3 rad/s).
   int radius_mode = 0;
   float radius_reversion_time = 2.0f;
   // z_offset < 0 relabels the pairs (orientation + pi/2, radii swapped, z_offset negated) instead

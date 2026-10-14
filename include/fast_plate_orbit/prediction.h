@@ -122,7 +122,11 @@ class prediction {
     const float position_noise_scale = sqrtf(one_twelfth) * powf(velocity_noise_scale, 3);
 
     const float radius_noise_gain = (radius_mode != 0 || fabsf(orientation_velocity_) > 2.0f) ? 1.0f : 0.0f;
-    const float radius_pull = radius_mode == 2 ? pf::util::min(1.0f, time_offset_seconds / radius_reversion_time) : 0.0f;
+    // Mode 3 pulls only while the robot isn't spinning (fully below 1 rad/s, not at all above 3),
+    // when the radius can't be seen; spinning, the plates pin it down without a bias toward the prior.
+    const float spin_gate = pf::util::max(0.0f, pf::util::min(1.0f, (3.0f - fabsf(orientation_velocity_)) / 2.0f));
+    const float pull_weight = radius_mode == 2 ? 1.0f : (radius_mode == 3 ? spin_gate : 0.0f);
+    const float radius_pull = pull_weight * pf::util::min(1.0f, time_offset_seconds / radius_reversion_time);
     const float d_radius_0 = radius_noise_gain * radius_noise_scale * radius_0_noise - radius_pull * (radius_0_ - radius_prior);
     const float d_radius_1 = radius_noise_gain * radius_noise_scale * radius_1_noise - radius_pull * (radius_1_ - radius_prior);
 
