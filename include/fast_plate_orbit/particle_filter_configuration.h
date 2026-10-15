@@ -88,9 +88,10 @@ struct most_likely_particle_reduction_impl {
 
     const float settled = c_alpha * a_particle.settled() + alpha * b_particle.settled();
     const float maneuver = c_alpha * a_particle.maneuver() + alpha * b_particle.maneuver();
+    const Eigen::Vector2f slope = c_alpha * a_particle.slope() + alpha * b_particle.slope();
 
     const auto state = prediction(
-        radius_0, radius_1, orientation, orientation_velocity, center, center_velocity, z_offset, settled, maneuver);
+        radius_0, radius_1, orientation, orientation_velocity, center, center_velocity, z_offset, settled, maneuver, slope);
     return state_type{state, a.count() + b.count()};
   }
 };
@@ -147,7 +148,15 @@ class particle_filter_configuration {
       if (params_.obs_model == 0) {
         float log_p = sampler.unnormalized_normal_log_density(x.position_diagonal_covariance(), error);
         if (params_.position_outlier_weight > 0.0f) {
-          log_p = logf(params_.position_outlier_weight + (1.0f - params_.position_outlier_weight) * expf(log_p));
+          const float w = params_.position_outlier_weight;
+          if (params_.position_outlier_split) {
+            const Eigen::Vector3f cov = x.position_diagonal_covariance();
+            const float log_xy = -0.5f * (error[0] * error[0] / cov[0] + error[1] * error[1] / cov[1]);
+            const float log_z = -0.5f * error[2] * error[2] / cov[2];
+            log_p = logf(w + (1.0f - w) * expf(log_xy)) + logf(w + (1.0f - w) * expf(log_z));
+          } else {
+            log_p = logf(w + (1.0f - w) * expf(log_p));
+          }
         }
         return log_p + log_p_yaw(x, y);
       }
@@ -207,7 +216,11 @@ class particle_filter_configuration {
         const float miss_high = plate_z - z_offset - params_.center_z_prior;
         const float miss_low = plate_z + z_offset - params_.center_z_prior;
         const float logit = 0.5f * (miss_low * miss_low - miss_high * miss_high) / params_.center_z_prior_variance;
-        seen_plate_is_high = sampler.normal_sample(1.0f) < logit * 0.6266f;  // probit(x) ~ logistic(1.6 x)
+        const float draw = sampler.normal_sample(1.0f);
+        const bool off_level = params_.center_z_prior_gate > 0.0f &&
+                               pf::util::min(fabsf(miss_high), fabsf(miss_low)) > params_.center_z_prior_gate;
+        seen_plate_is_high = off_level ? sampler.normal_sample(1.0f) > 0.0f
+                                       : draw < logit * 0.6266f;  // probit(x) ~ logistic(1.6 x)
       }
       const float seen_radius =
           !remembered ? params_.radius_prior : (seen_plate_is_high ? params_.radius_prior_high : params_.radius_prior_low);
@@ -238,6 +251,10 @@ class particle_filter_configuration {
     const Eigen::Vector2f center_velocity = sampler.normal_sample(params_.center_xy_velocity_prior_diagonal_covariance);
 
     const float maneuver = params_.maneuver_velocity_variance > 0.0f && sampler.normal_sample(1.0f) > 0.0f ? 1.0f : 0.0f;
+    const Eigen::Vector2f slope =
+        params_.slope_process_variance > 0.0f
+            ? sampler.normal_sample(Eigen::Vector2f{params_.slope_prior_variance, params_.slope_prior_variance})
+            : Eigen::Vector2f::Zero().eval();
     return prediction(
         radius_0,
         radius_1,
@@ -247,7 +264,8 @@ class particle_filter_configuration {
         center_velocity,
         z_offset,
         params_.settled_prior,
-        maneuver);
+        maneuver,
+        slope);
   }
 
   PF_TARGET_ONLY_ATTRS void apply_process(const float& time_offset_seconds, util::default_rv_sampler& sampler, prediction& state)
@@ -258,6 +276,7 @@ class particle_filter_configuration {
     float orientation_velocity_noise_1 = sampler.normal_sample(params_.orientation_velocity_process_variance);
 
     const float center_z_position_noise = sampler.normal_sample(params_.center_z_position_process_variance);
+    float center_z_extra_noise = 0.0f;
 
     const float z_offset_noise = sampler.normal_sample(params_.z_offset_process_variance);
 
@@ -272,6 +291,9 @@ class particle_filter_configuration {
       const float u = 0.5f * erfcf(-sampler.normal_sample(1.0f) * static_cast<float>(M_SQRT1_2));
       if (u < params_.maneuver_switch_rate * time_offset_seconds) state.set_maneuver(1.0f - state.maneuver());
       if (state.maneuver() > 0.5f) {
+        if (params_.center_z_maneuver_variance > 0.0f) {
+          center_z_extra_noise = sampler.normal_sample(params_.center_z_maneuver_variance);
+        }
         const float gain =
             sqrtf(params_.maneuver_velocity_variance / params_.center_xy_velocity_process_diagonal_covariance[0]);
         center_xy_velocity_noise_0 *= gain;
@@ -281,6 +303,16 @@ class particle_filter_configuration {
         orientation_velocity_noise_0 *= spin_gain;
         orientation_velocity_noise_1 *= spin_gain;
       }
+    }
+
+    Eigen::Vector2f slope_noise = Eigen::Vector2f::Zero();
+    if (params_.slope_process_variance > 0.0f) {
+      // per meter driven (and a little per second)
+      const float calm = params_.maneuver_velocity_variance > 0.0f && state.maneuver() < 0.5f ? params_.slope_calm_fraction : 1.0f;
+      const float exposure = calm * time_offset_seconds * (state.center_velocity().norm() +
+                                                           params_.slope_time_variance / params_.slope_process_variance);
+      slope_noise = sqrtf(exposure) *
+                    sampler.normal_sample(Eigen::Vector2f{params_.slope_process_variance, params_.slope_process_variance});
     }
 
     state.update_state(
@@ -299,7 +331,9 @@ class particle_filter_configuration {
         params_.relabel_at_zero,
         params_.lock_time,
         params_.lock_floor,
-        params_.settle_by_angle);
+        params_.settle_by_angle,
+        slope_noise,
+        center_z_extra_noise);
   }
 
   particle_filter_configuration(const particle_filter_configuration_parameters& params) noexcept : params_{params} {}

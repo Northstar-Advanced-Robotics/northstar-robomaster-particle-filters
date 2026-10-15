@@ -30,6 +30,22 @@ PF_TARGET_ATTRS [[nodiscard]] inline float to_z_offset(const float& z_offset) no
   return pf::util::min(offset_limit, fabsf(z_offset));
 }
 
+PF_TARGET_ATTRS [[nodiscard]] inline Eigen::Vector2f to_slope(const Eigen::Vector2f& slope) noexcept {
+  constexpr float slope_limit = 0.6f;  // ~31 degrees
+  const float norm = slope.norm();
+  return norm > slope_limit ? (slope * (slope_limit / norm)).eval() : slope;
+}
+
+// The chassis tilt on ground of gradient `slope`: the rotation taking world up onto the ground's
+// normal n (about the horizontal axis across the slope), applied to a chassis-frame vector v.
+PF_TARGET_ATTRS [[nodiscard]] inline Eigen::Vector3f tilt_by_slope(const Eigen::Vector2f& slope, const Eigen::Vector3f& v) noexcept {
+  const float inv = 1.0f / sqrtf(1.0f + slope.squaredNorm());
+  const Eigen::Vector3f n{-slope[0] * inv, -slope[1] * inv, inv};
+  const Eigen::Vector3f a{-n[1], n[0], 0.0f};  // up x n
+  const Eigen::Vector3f av = a.cross(v);
+  return v + av + a.cross(av) / (1.0f + n[2]);
+}
+
 PF_TARGET_ATTRS [[nodiscard]] inline Eigen::Vector3f rpad_zero(const Eigen::Vector2f& vector) noexcept {
   return (Eigen::Vector3f{} << vector, Eigen::Matrix<float, 1, 1>::Zero()).finished();
 }
@@ -55,6 +71,10 @@ class prediction {
 
   Eigen::Vector3f center_;
   Eigen::Vector2f center_velocity_;
+  // Gradient (dz/dx, dz/dy) of the ground under the robot: its chassis tilts with it, so a plate
+  // sits radius * slope.(its direction) higher, and driving moves the center by slope.velocity
+  // up or down. Zero unless the filter's slope_process_variance turns it on.
+  Eigen::Vector2f slope_;
 
   struct angle_offset_and_radius {
     float angle_offset;
@@ -78,13 +98,17 @@ class prediction {
     return angle_offsets_and_radii.transformed([this](const angle_offset_and_radius& value) {
       const float angle = value.angle_offset + orientation_;
 
-      const Eigen::Vector3f predicted_plate_position =
-          center_ +
-          (Eigen::Vector3f{} << value.radius * cosf(angle), value.radius * sinf(angle), value.z_sign * z_offset_).finished();
+      const float c = cosf(angle);
+      const float s = sinf(angle);
+      // In the chassis frame, then tilted with the ground under the robot (nothing on level ground).
+      const Eigen::Vector3f offset{value.radius * c, value.radius * s, value.z_sign * z_offset_};
+      const Eigen::Vector3f turning{-value.radius * s, value.radius * c, 0.0f};
+      const bool level = slope_[0] == 0.0f && slope_[1] == 0.0f;
+      const Eigen::Vector3f predicted_plate_position = center_ + (level ? offset : helper::tilt_by_slope(slope_, offset));
 
       const Eigen::Vector3f predicted_plate_velocity =
-          helper::rpad_zero(center_velocity_) +
-          orientation_velocity_ * value.radius * (Eigen::Vector3f{} << -sinf(angle), cosf(angle), 0.0f).finished();
+          (Eigen::Vector3f{} << center_velocity_, slope_.dot(center_velocity_)).finished() +
+          orientation_velocity_ * (level ? turning : helper::tilt_by_slope(slope_, turning));
 
       return predicted_plate(predicted_plate_position, predicted_plate_velocity);
     });
@@ -96,11 +120,12 @@ class prediction {
         radius_1_,
         orientation_ + time_offset_seconds * orientation_velocity_,
         orientation_velocity_,
-        center_ + time_offset_seconds * helper::rpad_zero(center_velocity_),
+        center_ + time_offset_seconds * (Eigen::Vector3f{} << center_velocity_, slope_.dot(center_velocity_)).finished(),
         center_velocity_,
         z_offset_,
         settled_,
-        maneuver_);
+        maneuver_,
+        slope_);
   }
 
   PF_TARGET_ATTRS void update_state(
@@ -119,7 +144,9 @@ class prediction {
       const bool& relabel_at_zero = false,
       const float& lock_time = 0.0f,
       const float& lock_floor = 1.0f,
-      const bool& settle_by_angle = false) noexcept {
+      const bool& settle_by_angle = false,
+      const Eigen::Vector2f& slope_noise = Eigen::Vector2f::Zero(),
+      const float& center_z_extra_noise = 0.0f) noexcept {
     static constexpr float one_half = 1.0 / 2.0;
     static constexpr float one_twelfth = 1.0 / 12.0;
 
@@ -158,7 +185,7 @@ class prediction {
     const float d_radius_1 =
         lock_gain * radius_noise_gain * radius_noise_scale * radius_1_noise - radius_pull * (radius_1_ - radius_prior);
 
-    const float d_center_z = lock_gain * center_z_position_noise_scale * center_z_position_noise;
+    const float d_center_z = center_z_position_noise_scale * (lock_gain * center_z_position_noise + center_z_extra_noise);
 
     const float d_z_offset = lock_gain * (radius_mode == 4 ? spin_fraction : 1.0f) * radius_noise_scale * z_offset_noise;
 
@@ -168,7 +195,7 @@ class prediction {
                                 position_noise_scale * orientation_velocity_noise_0;
 
     const Eigen::Vector2f d_center_velocity = velocity_noise_scale * center_xy_velocity_noise_1;
-    const Eigen::Vector3f d_center = time_offset_seconds * helper::rpad_zero(center_velocity_) +
+    const Eigen::Vector3f d_center = time_offset_seconds * (Eigen::Vector3f{} << center_velocity_, slope_.dot(center_velocity_)).finished() +
                                      one_half * time_offset_seconds * helper::rpad_zero(d_center_velocity) +
                                      position_noise_scale * helper::rpad_zero(center_xy_velocity_noise_0) +
                                      helper::lpad_zero(d_center_z);
@@ -193,6 +220,7 @@ class prediction {
     z_offset_ = helper::to_z_offset(z_offset_);
 
     center_velocity_ = center_velocity_ + d_center_velocity;
+    slope_ = helper::to_slope(slope_ + slope_noise);
   }
 
   PF_TARGET_ATTRS [[nodiscard]] const float& radius_0() const noexcept { return radius_0_; }
@@ -205,6 +233,7 @@ class prediction {
   PF_TARGET_ATTRS [[nodiscard]] const float& orientation_velocity() const noexcept { return orientation_velocity_; }
   PF_TARGET_ATTRS [[nodiscard]] const Eigen::Vector3f& center() const noexcept { return center_; }
   PF_TARGET_ATTRS [[nodiscard]] const Eigen::Vector2f& center_velocity() const noexcept { return center_velocity_; }
+  PF_TARGET_ATTRS [[nodiscard]] const Eigen::Vector2f& slope() const noexcept { return slope_; }
 
   PF_TARGET_ATTRS prediction() noexcept
       : radius_0_{0.0f},
@@ -215,7 +244,8 @@ class prediction {
         orientation_{0.0f},
         orientation_velocity_{0.0f},
         center_{Eigen::Vector3f::Zero()},
-        center_velocity_{Eigen::Vector2f::Zero()} {}
+        center_velocity_{Eigen::Vector2f::Zero()},
+        slope_{Eigen::Vector2f::Zero()} {}
 
   PF_TARGET_ATTRS prediction(
       const float& radius_0,
@@ -226,7 +256,8 @@ class prediction {
       const Eigen::Vector2f& center_velocity,
       const float& z_offset,
       const float& settled = 0.0f,
-      const float& maneuver = 0.0f) noexcept
+      const float& maneuver = 0.0f,
+      const Eigen::Vector2f& slope = Eigen::Vector2f::Zero()) noexcept
       : radius_0_{helper::to_radius(radius_0)},
         radius_1_{helper::to_radius(radius_1)},
         z_offset_{helper::to_z_offset(z_offset)},
@@ -235,7 +266,8 @@ class prediction {
         orientation_{helper::to_orientation(orientation)},
         orientation_velocity_{orientation_velocity},
         center_{center},
-        center_velocity_{center_velocity} {}
+        center_velocity_{center_velocity},
+        slope_{helper::to_slope(slope)} {}
 };
 
 }  // namespace fast_plate_orbit

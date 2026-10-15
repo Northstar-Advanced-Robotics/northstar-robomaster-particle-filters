@@ -81,6 +81,9 @@ struct particle_filter_configuration_parameters {
   // nearer that center), instead of half the particles guessing each way.
   float center_z_prior = 0.0f;
   float center_z_prior_variance = 0.0f;
+  // center_z_prior_gate > 0: ignore that remembered height when the plate is further than this
+  // from both places it could put the center (the robot has since gone up or down a level).
+  float center_z_prior_gate = 0.0f;
   // maneuver_velocity_variance > 0: each particle is either calm (center velocity noise
   // center_xy_velocity_process_diagonal_covariance) or maneuvering (this variance, per axis), and
   // switches at maneuver_switch_rate per second. A robot spinning in place is followed by calm
@@ -109,6 +112,25 @@ struct particle_filter_configuration_parameters {
   // position_outlier_weight > 0: a plate's position is scored log(w + (1 - w) * Gaussian), so a
   // wild PnP position (far plates' range has a heavy tail) can't drag the whole filter.
   float position_outlier_weight = 0.0f;
+  // position_outlier_split: that floor applies to the horizontal position and the height
+  // separately, so a robot whose height the filter has wrong (it went up a ramp) still pins its
+  // horizontal position.
+  bool position_outlier_split = false;
+  // center_z_maneuver_variance > 0 (with the maneuver modes on): maneuvering particles' center
+  // height also moves with this process variance (m^2/s), not damped by the lock: a robot dropping
+  // off a ledge, or one whose height the slope doesn't explain.
+  float center_z_maneuver_variance = 0.0f;
+  // slope_process_variance > 0: each particle also carries the gradient of the ground under the
+  // robot (prediction::slope), which tilts its plate ring and lifts or lowers its center as it
+  // drives. The slope's noise is this variance per meter driven, plus slope_time_variance per second
+  // (a parked robot's slope barely moves; one driving onto a ramp finds it within ~0.3 m). It starts
+  // at 0 with slope_prior_variance.
+  float slope_process_variance = 0.0f;
+  float slope_time_variance = 0.0f;
+  float slope_prior_variance = 0.0f;
+  // With the maneuver modes on, calm particles' slope noise is this fraction of it (a robot driving
+  // across level ground keeps its slope at 0; one driving onto a ramp is followed by maneuvering ones).
+  float slope_calm_fraction = 1.0f;
 };
 
 }  // namespace fast_plate_orbit
