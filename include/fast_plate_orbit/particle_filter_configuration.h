@@ -135,8 +135,10 @@ class particle_filter_configuration {
       error = error - 6.2831853f * floorf((error + 3.1415927f) / 6.2831853f);
       const Eigen::Vector2f to_observer = (state.observer_position() - y.position()).template head<2>();
       const float cos_angle = facing.dot(to_observer) / (facing.norm() * to_observer.norm() + 1e-6f);
-      const float variance = (x.yaw_variance() > 0.0f ? x.yaw_variance() : params_.yaw_variance) +
-                             params_.yaw_variance_angle * pf::util::max(0.0f, 1.0f - cos_angle * cos_angle);
+      const float slow = pf::util::max(0.0f, 1.0f - fabsf(given.orientation_velocity()) / params_.yaw_slow_spin);
+      const float variance = ((x.yaw_variance() > 0.0f ? x.yaw_variance() : params_.yaw_variance) +
+                              params_.yaw_variance_angle * pf::util::max(0.0f, 1.0f - cos_angle * cos_angle)) *
+                             (1.0f + (params_.yaw_slow_factor - 1.0f) * slow);
       return logf(params_.yaw_outlier_weight + (1.0f - params_.yaw_outlier_weight) * expf(-0.5f * error * error / variance));
     };
 

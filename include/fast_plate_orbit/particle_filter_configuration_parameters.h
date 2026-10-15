@@ -101,6 +101,11 @@ struct particle_filter_configuration_parameters {
   float yaw_variance_angle = 0.0f;
   float yaw_outlier_weight = 0.05f;
   bool yaw_init = false;
+  // yaw_slow_factor > 1: a particle spinning slower than yaw_slow_spin (rad/s) trusts each plate's
+  // yaw less, up to this factor on the variance when still (linearly in between): a still robot's
+  // orientation then comes from many frames' yaw at once rather than following each frame's noise.
+  float yaw_slow_factor = 1.0f;
+  float yaw_slow_spin = 1.0f;
   // position_outlier_weight > 0: a plate's position is scored log(w + (1 - w) * Gaussian), so a
   // wild PnP position (far plates' range has a heavy tail) can't drag the whole filter.
   float position_outlier_weight = 0.0f;
